@@ -8,10 +8,11 @@ alwaysApply: true
 This repo is a RunPod serverless worker for Wan2.2 image-to-video generation through ComfyUI.
 
 - `Dockerfile` extends `runpod/worker-comfyui:5.8.5-base`, installs ComfyUI video/VACE nodes, and bakes Wan2.2 I2V/VACE fp8 models into the image.
-- `handler.py` is the RunPod entrypoint. It starts ComfyUI, writes base64 input files into `/comfyui/input`, builds/queues workflows, and returns base64 videos/images plus `last_frame`.
+- `handler.py` is the RunPod entrypoint. It starts ComfyUI, writes base64 input files into `/comfyui/input`, builds/queues workflows, and returns compact base64 video output plus `last_frame`.
 - `workflow_builder.py` maps compact API modes to workflow templates and replaces `${placeholder}` values.
 - `comfy_client.py` owns ComfyUI `/prompt`, `/history`, readiness polling, and output-file collection.
 - `workflows/*.json` must stay in ComfyUI API workflow format, not UI-export graph format.
+- Treat the current Docker image as the source of truth. If a new workflow needs LoRAs, Hugging Face models, custom nodes, or Python packages, add them to the current build files in the same change.
 
 API modes:
 
@@ -20,6 +21,19 @@ API modes:
 - `workflow`: raw ComfyUI API workflow passthrough.
 
 For continuous video, pass each response's `last_frame.data` into the next request's `first_frame`, then drop the first frame of every segment after segment 0 when stitching.
+
+Output rule:
+
+- Keep RunPod job results small. A RunPod `job-done` 400 after `Prompt executed` usually means the handler payload was too large, not that ComfyUI failed.
+- By default, return `videos`, one `last_frame`, `video_count`, and `image_count`; do not return the full decoded PNG frame batch.
+- `include_images: true` is only for tiny debug runs because it can serialize every saved frame and exceed RunPod result limits.
+
+Dependency rule:
+
+- Hugging Face assets must be downloaded in `Dockerfile` with the correct ComfyUI model directory, filename, and preferably a pinned revision or commit when stability matters.
+- LoRAs belong under `models/loras` and must be represented in workflow templates and/or `workflow_builder.py` defaults when callers need to select them.
+- Python packages belong in `requirements.txt`; custom ComfyUI nodes belong in `Dockerfile`; model defaults belong in `workflow_builder.py`.
+- Do not assume a future rebuild, manual volume upload, or interactive ComfyUI install will provide dependencies unless the user explicitly asks for that deployment model.
 
 After Python or workflow-template edits, run:
 

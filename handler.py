@@ -42,14 +42,23 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
         history = client.wait_for_prompt(prompt_id)
         outputs = client.collect_outputs(history, COMFYUI_OUTPUT_DIR)
 
+        videos = outputs["videos"]
+        images = outputs["images"]
+
         response = {
             "status": "success",
             "prompt_id": prompt_id,
             "mode": request_input.get("mode", "raw" if "workflow" in request_input else "flf2v"),
-            "videos": outputs["videos"],
-            "images": outputs["images"],
+            "videos": videos,
+            "last_frame": _select_last_frame(images),
+            "video_count": len(videos),
+            "image_count": len(images),
         }
-        response["last_frame"] = _select_last_frame(outputs["images"])
+
+        include_images = bool(request_input.get("include_images", False))
+        if include_images:
+            response["images"] = images
+
         return response
     except (ComfyClientError, HandlerError, WorkflowBuildError) as exc:
         return {"status": "error", "error": str(exc)}

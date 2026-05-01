@@ -12,6 +12,7 @@
     "cfg": 3.5,
     "shift": 8,
     "vace_strength": 1.0,
+    "include_images": false,
     "output_prefix": "wan22_continuous_segment_002",
     "first_frame": "data:image/png;base64,REPLACE_WITH_PREVIOUS_RESPONSE_LAST_FRAME"
   }

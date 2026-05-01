@@ -57,6 +57,7 @@ Common fields:
 - `cfg`: defaults to `5.0`
 - `shift`: defaults to `5.0`
 - `output_prefix`: ComfyUI output filename prefix
+- `include_images`: when `false` (default), do not embed every decoded frame PNG into the RunPod JSON output; omit this field entirely for the default compact response
 
 See `examples/flf2v_request.json` and `examples/continuous_request.json`.
 
@@ -87,8 +88,11 @@ curl "https://api.runpod.ai/v2/<endpoint_id>/status/<job_id>" \
 Successful output includes:
 
 - `videos`: generated MP4 files as data URIs
-- `images`: saved decoded frames as data URIs
-- `last_frame`: the final saved frame for chaining the next segment
+- `last_frame`: final saved chaining frame from the `_last_frame` prefix as a data URI (if available)
+- `video_count`: number of video outputs bundled into the payload
+- `image_count`: ComfyUI image outputs produced internally (decoded frame PNGs saved by workflows), even when they are omitted from JSON
+
+For debugging oversized responses, temporarily set `"include_images": true` inside `input`. This returns full `images` data URIs, but can blow past RunPod result size limits.
 
 ## Raw Workflow Passthrough
 
