@@ -1,0 +1,30 @@
+---
+description: Core context and conventions for the Wan2.2 RunPod ComfyUI worker
+alwaysApply: true
+---
+
+# Wan RunPod Worker Context
+
+This repo is a RunPod serverless worker for Wan2.2 image-to-video generation through ComfyUI.
+
+- `Dockerfile` extends `runpod/worker-comfyui:5.8.5-base`, installs ComfyUI video/VACE nodes, and bakes Wan2.2 I2V/VACE fp8 models into the image.
+- `handler.py` is the RunPod entrypoint. It starts ComfyUI, writes base64 input files into `/comfyui/input`, builds/queues workflows, and returns base64 videos/images plus `last_frame`.
+- `workflow_builder.py` maps compact API modes to workflow templates and replaces `${placeholder}` values.
+- `comfy_client.py` owns ComfyUI `/prompt`, `/history`, readiness polling, and output-file collection.
+- `workflows/*.json` must stay in ComfyUI API workflow format, not UI-export graph format.
+
+API modes:
+
+- `flf2v`: uses first and last frames for a first segment.
+- `vace_extend` and `continuous`: continue from the previous response's `last_frame.data`.
+- `workflow`: raw ComfyUI API workflow passthrough.
+
+For continuous video, pass each response's `last_frame.data` into the next request's `first_frame`, then drop the first frame of every segment after segment 0 when stitching.
+
+After Python or workflow-template edits, run:
+
+```bash
+python scripts/validate_static.py
+```
+
+Static validation does not prove ComfyUI node compatibility; validate real generation on a RunPod GPU worker.

@@ -1,0 +1,162 @@
+{
+  "6": {
+    "inputs": {
+      "text": "${prompt}",
+      "clip": ["38", 0]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {"title": "Positive Prompt"}
+  },
+  "7": {
+    "inputs": {
+      "text": "${negative_prompt}",
+      "clip": ["38", 0]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {"title": "Negative Prompt"}
+  },
+  "8": {
+    "inputs": {
+      "samples": ["58", 0],
+      "vae": ["39", 0]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {"title": "Decode Video Frames"}
+  },
+  "28": {
+    "inputs": {
+      "filename_prefix": "${last_frame_prefix}",
+      "images": ["8", 0]
+    },
+    "class_type": "SaveImage",
+    "_meta": {"title": "Save Frames For Boundary Extraction"}
+  },
+  "37": {
+    "inputs": {
+      "unet_name": "${vace_high_model}",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {"title": "Load Wan2.2 VACE High Noise Model"}
+  },
+  "38": {
+    "inputs": {
+      "clip_name": "${text_encoder}",
+      "type": "wan",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {"title": "Load UMT5 Text Encoder"}
+  },
+  "39": {
+    "inputs": {
+      "vae_name": "${vace_vae}"
+    },
+    "class_type": "VAELoader",
+    "_meta": {"title": "Load Wan VAE"}
+  },
+  "47": {
+    "inputs": {
+      "frame_rate": "${fps}",
+      "loop_count": 0,
+      "filename_prefix": "${output_prefix}",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 19,
+      "save_metadata": false,
+      "trim_to_audio": false,
+      "pingpong": false,
+      "save_output": true,
+      "images": ["8", 0]
+    },
+    "class_type": "VHS_VideoCombine",
+    "_meta": {"title": "Save MP4 Segment"}
+  },
+  "50": {
+    "inputs": {
+      "positive": ["6", 0],
+      "negative": ["7", 0],
+      "vae": ["39", 0],
+      "width": "${width}",
+      "height": "${height}",
+      "length": "${frames}",
+      "batch_size": 1,
+      "strength": "${vace_strength}",
+      "reference_image": ["52", 0]
+    },
+    "class_type": "WanVaceToVideo",
+    "_meta": {"title": "VACE Extension Conditioning"}
+  },
+  "52": {
+    "inputs": {
+      "image": "${first_frame}",
+      "upload": "image"
+    },
+    "class_type": "LoadImage",
+    "_meta": {"title": "Load Previous Tail Frame"}
+  },
+  "54": {
+    "inputs": {
+      "model": ["37", 0],
+      "shift": "${shift}"
+    },
+    "class_type": "ModelSamplingSD3",
+    "_meta": {"title": "High Noise Sampling Shift"}
+  },
+  "55": {
+    "inputs": {
+      "model": ["56", 0],
+      "shift": "${shift}"
+    },
+    "class_type": "ModelSamplingSD3",
+    "_meta": {"title": "Low Noise Sampling Shift"}
+  },
+  "56": {
+    "inputs": {
+      "unet_name": "${vace_low_model}",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {"title": "Load Wan2.2 VACE Low Noise Model"}
+  },
+  "57": {
+    "inputs": {
+      "add_noise": "enable",
+      "noise_seed": "${seed}",
+      "control_after_generate": "fixed",
+      "steps": "${steps}",
+      "cfg": "${cfg}",
+      "sampler_name": "${sampler_name}",
+      "scheduler": "${scheduler}",
+      "start_at_step": 0,
+      "end_at_step": "${high_noise_end_step}",
+      "return_with_leftover_noise": "enable",
+      "model": ["54", 0],
+      "positive": ["50", 0],
+      "negative": ["50", 1],
+      "latent_image": ["50", 2]
+    },
+    "class_type": "KSamplerAdvanced",
+    "_meta": {"title": "High Noise Sampling Pass"}
+  },
+  "58": {
+    "inputs": {
+      "add_noise": "disable",
+      "noise_seed": 0,
+      "control_after_generate": "fixed",
+      "steps": "${steps}",
+      "cfg": "${cfg}",
+      "sampler_name": "${sampler_name}",
+      "scheduler": "${scheduler}",
+      "start_at_step": "${high_noise_end_step}",
+      "end_at_step": 10000,
+      "return_with_leftover_noise": "disable",
+      "model": ["55", 0],
+      "positive": ["50", 0],
+      "negative": ["50", 1],
+      "latent_image": ["57", 0]
+    },
+    "class_type": "KSamplerAdvanced",
+    "_meta": {"title": "Low Noise Sampling Pass"}
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "input": {
+    "mode": "flf2v",
+    "request_id": "demo-flf2v-001",
+    "prompt": "cinematic camera drift, smooth motion, consistent lighting, detailed subject motion",
+    "negative_prompt": "cuts, jump cut, flicker, jitter, warped hands, low quality, artifacts",
+    "width": 832,
+    "height": 480,
+    "frames": 81,
+    "fps": 16,
+    "steps": 20,
+    "cfg": 3.5,
+    "shift": 8,
+    "output_prefix": "wan22_flf2v_demo",
+    "first_frame": "data:image/png;base64,REPLACE_WITH_BASE64_START_FRAME",
+    "last_frame": "data:image/png;base64,REPLACE_WITH_BASE64_END_FRAME"
+  }
+}
