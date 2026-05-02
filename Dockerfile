@@ -6,6 +6,7 @@ ENV PYTHONUNBUFFERED=1 \
     COMFYUI_PORT=8188 \
     COMFYUI_INPUT_DIR=/comfyui/input \
     COMFYUI_OUTPUT_DIR=/comfyui/output \
+    COMFYUI_LORA_DIR=/comfyui/models/loras \
     COMFYUI_TIMEOUT_SECONDS=1800
 
 WORKDIR /worker

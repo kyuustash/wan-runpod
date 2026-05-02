@@ -30,7 +30,7 @@ class WorkflowBuildError(ValueError):
     pass
 
 
-def build_workflow(request_input: dict[str, Any], files: dict[str, str]) -> dict[str, Any]:
+def build_workflow(request_input: dict[str, Any], files: dict[str, Any]) -> dict[str, Any]:
     if "workflow" in request_input:
         workflow = copy.deepcopy(request_input["workflow"])
         if not isinstance(workflow, dict):
@@ -45,6 +45,9 @@ def build_workflow(request_input: dict[str, Any], files: dict[str, str]) -> dict
     workflow = _load_template(template_name)
     params = _normalized_params(request_input, files)
     _apply_values(workflow, params)
+    loras = files.get("loras")
+    if isinstance(loras, list) and loras:
+        _inject_lora_chains(workflow, loras)
     return workflow
 
 
@@ -54,7 +57,7 @@ def _load_template(template_name: str) -> dict[str, Any]:
         return json.load(handle)
 
 
-def _normalized_params(request_input: dict[str, Any], files: dict[str, str]) -> dict[str, Any]:
+def _normalized_params(request_input: dict[str, Any], files: dict[str, Any]) -> dict[str, Any]:
     output_prefix = str(request_input.get("output_prefix") or "wan22_segment")
     seed = int(request_input.get("seed", -1))
     if seed < 0:
@@ -116,3 +119,57 @@ def _apply_values(workflow: dict[str, Any], params: dict[str, Any]) -> None:
                 if key not in params:
                     raise WorkflowBuildError(f"Workflow template requires missing value '{key}'")
                 inputs[input_name] = params[key]
+
+
+def _inject_lora_chains(workflow: dict[str, Any], loras: list[Any]) -> None:
+    specs: list[tuple[str, float]] = []
+    for idx, raw in enumerate(loras):
+        if not isinstance(raw, dict):
+            raise WorkflowBuildError(f"Resolved loras[{idx}] must be an object")
+        name = raw.get("adapter_name")
+        weight_raw = raw.get("adapter_weight", 1.0)
+        if not isinstance(name, str) or not name:
+            raise WorkflowBuildError(f"loras[{idx}] missing adapter_name")
+        try:
+            strength = float(weight_raw)
+        except (TypeError, ValueError) as exc:
+            raise WorkflowBuildError(f"loras[{idx}] adapter_weight must be numeric") from exc
+        specs.append((name, strength))
+
+    branch_pairs = (("37", "54"), ("56", "55"))
+    allocated = len(specs)
+
+    merged_ids = _allocate_node_ids(workflow, allocated * 2)
+    high_ids = merged_ids[:allocated]
+    low_ids = merged_ids[allocated:]
+
+    for (unet_id, sampling_id, lora_ids) in (
+        (branch_pairs[0][0], branch_pairs[0][1], high_ids),
+        (branch_pairs[1][0], branch_pairs[1][1], low_ids),
+    ):
+        if unet_id not in workflow or sampling_id not in workflow:
+            raise WorkflowBuildError("Workflow template missing UNet or ModelSampling nodes for LoRA injection")
+        prev_conn: Any = [unet_id, 0]
+
+        for lora_nid, spec in zip(lora_ids, specs):
+            workflow[lora_nid] = {
+                "inputs": {"model": prev_conn, "lora_name": spec[0], "strength_model": spec[1]},
+                "class_type": "LoraLoaderModelOnly",
+            }
+            prev_conn = [lora_nid, 0]
+
+        sampling_inputs = workflow[sampling_id].get("inputs")
+        if not isinstance(sampling_inputs, dict):
+            raise WorkflowBuildError(f"node {sampling_id} inputs missing")
+        sampling_inputs["model"] = prev_conn
+
+
+def _allocate_node_ids(workflow: dict[str, Any], count: int) -> list[str]:
+    numeric_ids: list[int] = []
+    for key in workflow:
+        try:
+            numeric_ids.append(int(key))
+        except ValueError:
+            continue
+    next_id = (max(numeric_ids) + 1) if numeric_ids else 1
+    return [str(next_id + i) for i in range(count)]

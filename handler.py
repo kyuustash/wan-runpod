@@ -5,7 +5,9 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse, urlencode
 
+import requests
 import runpod
 
 from comfy_client import ComfyClient, ComfyClientError
@@ -15,9 +17,12 @@ from workflow_builder import WorkflowBuildError, build_workflow
 COMFYUI_DIR = Path(os.getenv("COMFYUI_DIR", "/comfyui"))
 COMFYUI_INPUT_DIR = Path(os.getenv("COMFYUI_INPUT_DIR", str(COMFYUI_DIR / "input")))
 COMFYUI_OUTPUT_DIR = Path(os.getenv("COMFYUI_OUTPUT_DIR", str(COMFYUI_DIR / "output")))
+COMFYUI_LORA_DIR = Path(os.getenv("COMFYUI_LORA_DIR", str(COMFYUI_DIR / "models" / "loras")))
 COMFYUI_HOST = os.getenv("COMFYUI_HOST", "127.0.0.1")
 COMFYUI_PORT = int(os.getenv("COMFYUI_PORT", "8188"))
 COMFYUI_TIMEOUT_SECONDS = int(os.getenv("COMFYUI_TIMEOUT_SECONDS", "1800"))
+LORA_DOWNLOAD_MAX_BYTES = int(os.getenv("LORA_DOWNLOAD_MAX_BYTES", str(2 * 1024 * 1024 * 1024)))
+LORA_DOWNLOAD_TIMEOUT_SEC = int(os.getenv("LORA_DOWNLOAD_TIMEOUT_SEC", "600"))
 
 _COMFY_PROCESS: subprocess.Popen[bytes] | None = None
 _COMFY_CLIENT: ComfyClient | None = None
@@ -36,6 +41,7 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
 
         client = ensure_comfy_client()
         saved_files = save_request_files(request_input)
+        resolve_and_download_loras(request_input, saved_files)
         workflow = build_workflow(request_input, saved_files)
 
         prompt_id = client.queue_prompt(workflow)
@@ -101,9 +107,9 @@ def start_comfyui() -> None:
     time.sleep(1)
 
 
-def save_request_files(request_input: dict[str, Any]) -> dict[str, str]:
+def save_request_files(request_input: dict[str, Any]) -> dict[str, Any]:
     request_id = _safe_filename(str(request_input.get("request_id") or str(int(time.time() * 1000))))
-    saved: dict[str, str] = {}
+    saved: dict[str, Any] = {}
 
     file_fields = {
         "first_frame": "first_frame.png",
@@ -128,6 +134,127 @@ def save_request_files(request_input: dict[str, Any]) -> dict[str, str]:
         saved[Path(filename).stem] = filename
 
     return saved
+
+
+def resolve_and_download_loras(request_input: dict[str, Any], saved_files: dict[str, Any]) -> None:
+    """Populate saved_files[\"loras\"] when input.loras is non-empty; download each file to COMFYUI_LORA_DIR."""
+    raw = request_input.get("loras")
+    if raw is None or raw == []:
+        return
+    if not isinstance(raw, list):
+        raise HandlerError("input.loras must be an array when provided")
+
+    specs: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
+    COMFYUI_LORA_DIR.mkdir(parents=True, exist_ok=True)
+
+    for idx, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise HandlerError(f"input.loras[{idx}] must be an object")
+
+        url = item.get("source") or item.get("url")
+        adapter_name = item.get("adapter_name")
+        weight_any = item.get("adapter_weight", 1.0)
+
+        if not isinstance(url, str) or not url.strip():
+            raise HandlerError(f"input.loras[{idx}] must include a non-empty string source")
+        if not isinstance(adapter_name, str) or not adapter_name.strip():
+            raise HandlerError(f"input.loras[{idx}] must include a non-empty string adapter_name")
+        safe_name = _safe_filename(adapter_name)
+        if not safe_name.lower().endswith(".safetensors"):
+            raise HandlerError(f"input.loras[{idx}] adapter_name must end with .safetensors")
+
+        try:
+            weight = float(weight_any)
+        except (TypeError, ValueError) as exc:
+            raise HandlerError(f"input.loras[{idx}] adapter_weight must be a number") from exc
+
+        if safe_name in seen_names:
+            raise HandlerError(f"Duplicate adapter_name in loras list: {safe_name}")
+        seen_names.add(safe_name)
+
+        _validate_https_civitai_url(url)
+        dest = COMFYUI_LORA_DIR / safe_name
+        if not dest.exists() or dest.stat().st_size == 0:
+            _download_lora_file(url, dest)
+
+        specs.append({"adapter_name": safe_name, "adapter_weight": weight})
+
+    saved_files["loras"] = specs
+
+
+def _validate_https_civitai_url(url: str) -> None:
+    parsed = urlparse(url)
+    if (parsed.scheme or "").lower() != "https":
+        raise HandlerError("LoRA source must use https URLs")
+    if not _is_civitai_host(parsed.netloc or ""):
+        raise HandlerError(f"LoRA source host not allowed (only Civitai): {parsed.netloc}")
+
+
+def _is_civitai_host(netloc: str) -> bool:
+    host = (netloc.split("@")[-1].split(":")[0] or "").lower()
+    return host == "civitai.com" or host.endswith(".civitai.com")
+
+
+def _download_lora_file(url: str, dest: Path) -> None:
+    token = os.environ.get("CIVITAI_TOKEN")
+    download_url = url
+    parsed = urlparse(url)
+    if token and _is_civitai_host(parsed.netloc or ""):
+        sep = "&" if "?" in url else "?"
+        download_url = f"{url}{sep}{urlencode({'token': token})}"
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/octet-stream,*/*",
+    }
+
+    dest_part = dest.with_suffix(dest.suffix + ".download")
+    if dest_part.exists():
+        dest_part.unlink()
+
+    try:
+        with requests.get(
+            download_url,
+            headers=headers,
+            stream=True,
+            timeout=LORA_DOWNLOAD_TIMEOUT_SEC,
+            allow_redirects=True,
+        ) as response:
+            response.raise_for_status()
+            final = urlparse(response.url)
+            if (final.scheme or "").lower() != "https":
+                raise HandlerError(f"Redirect left non-https URL for LoRA download: {response.url}")
+            if not _is_civitai_host(final.netloc or ""):
+                raise HandlerError(f"Redirect blocked: final host must be Civitai: {final.netloc}")
+
+            content_length_header = response.headers.get("Content-Length")
+            if content_length_header and content_length_header.isdigit():
+                clen = int(content_length_header)
+                if clen > LORA_DOWNLOAD_MAX_BYTES:
+                    raise HandlerError(
+                        "LoRA download Content-Length exceeds LORA_DOWNLOAD_MAX_BYTES "
+                        f"({LORA_DOWNLOAD_MAX_BYTES})"
+                    )
+
+            written = 0
+            dest_part.parent.mkdir(parents=True, exist_ok=True)
+            with dest_part.open("wb") as handle:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if not chunk:
+                        continue
+                    written += len(chunk)
+                    if written > LORA_DOWNLOAD_MAX_BYTES:
+                        raise HandlerError(
+                            f"LoRA download exceeded LORA_DOWNLOAD_MAX_BYTES ({LORA_DOWNLOAD_MAX_BYTES})"
+                        )
+                    handle.write(chunk)
+
+        dest_part.replace(dest)
+    except Exception:
+        if dest_part.exists():
+            dest_part.unlink()
+        raise
 
 
 def _write_base64_file(encoded: Any, path: Path) -> None:

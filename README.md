@@ -58,6 +58,14 @@ Common fields:
 - `shift`: defaults to `5.0`
 - `output_prefix`: ComfyUI output filename prefix
 - `include_images`: when `false` (default), do not embed every decoded frame PNG into the RunPod JSON output; omit this field entirely for the default compact response
+- `loras`: optional array of adapters for **compact modes** (`flf2v`, `vace_extend`, `continuous` only—raw `workflow` passthrough ignores it). Omit the field entirely or send `[]` to keep the baked workflow unchanged. Each item uses:
+  - `source`: **https** Civitai download URL (host must be `civitai.com` before and after redirects)
+  - `adapter_name`: filename under ComfyUI's `models/loras`, must end in `.safetensors` (use a repo-unique basename per adapter)
+  - `adapter_weight`: strength passed to ComfyUI `LoraLoaderModelOnly` (`strength_model`)
+
+Set **`CIVITAI_TOKEN`** in the worker environment if your Civitai download URLs require authentication; the worker appends `token` when present (see `handler._download_lora_file`). Optional: `COMFYUI_LORA_DIR` (default `/comfyui/models/loras`), `LORA_DOWNLOAD_MAX_BYTES`, `LORA_DOWNLOAD_TIMEOUT_SEC`.
+
+LoRAs must be compatible with Wan2.2 I2V / VACE; unrelated SDXL/Flux LoRAs may have no effect or break the run.
 
 See `examples/flf2v_request.json` and `examples/continuous_request.json`.
 
@@ -113,7 +121,7 @@ Advanced callers can provide a ComfyUI API workflow directly:
 }
 ```
 
-When using raw workflows with inputs, include `images` items with `name` and `image`, or use the top-level frame fields. Files are written into ComfyUI's input directory before the workflow is queued.
+When using raw workflows with inputs, include `images` items with `name` and `image`, or use the top-level frame fields. Files are written into ComfyUI's input directory before the workflow is queued. The `loras` request field applies only to compact modes (`flf2v`, `vace_extend`, `continuous`); embedding LoRAs in a raw workflow requires adding `LoraLoaderModelOnly` (or compatible) nodes yourself.
 
 ## Static Validation
 
