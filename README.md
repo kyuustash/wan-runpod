@@ -27,6 +27,16 @@ docker push <registry>/<image>:wan22
 
 The baked model set is large. Set a large enough container disk in the RunPod template, and use a high-VRAM GPU class suitable for Wan2.2 14B fp8 video workflows.
 
+### RunPod builder timeouts
+
+Large images can fail mid-build or during registry upload. On the endpoint **Builds** tab, check whether the failure happened in **Building** (downloads, `RUN` steps) or **Uploading** (pushing layers); that points to different fixes (HF/network vs registry throughput).
+
+For GitHub-connected workers, RunPod documents a **160-minute** total limit for the build plus upload; see [GitHub integration limitations](https://docs.runpod.io/serverless/workers/github-integration). If you see a shorter cutoff, treat it as an environment-specific timeout and still use the logs to see which phase stopped.
+
+The Dockerfile uses **one `RUN` per model file** so each finished download becomes its own layer. Rebuilds can reuse those layers when the remote builder’s cache still has them.
+
+If the hosted builder keeps timing out or never warms cache, run `docker build` and `docker push` on your own hardware (or a VPS / CI you control). Avoid baking multi-gigabyte model downloads in **GitHub Actions** if your account is sensitive to large outbound pulls on shared runners. Point the RunPod template **Container image** at the registry tag you pushed.
+
 ## RunPod Endpoint
 
 Create a serverless template with:
