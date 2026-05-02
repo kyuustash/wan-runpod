@@ -69,11 +69,11 @@ Common fields:
 - `output_prefix`: ComfyUI output filename prefix
 - `include_images`: when `false` (default), do not embed every decoded frame PNG into the RunPod JSON output; omit this field entirely for the default compact response
 - `loras`: optional array of adapters for **compact modes** (`flf2v`, `vace_extend`, `continuous` only—raw `workflow` passthrough ignores it). Omit the field entirely or send `[]` to keep the baked workflow unchanged. Each item uses:
-  - `source`: **https** Civitai download URL (host must be `civitai.com` before and after redirects)
+  - `source`: **https** LoRA download URL (any host you trust; the final URL after redirects must stay **https**)
   - `adapter_name`: filename under ComfyUI's `models/loras`, must end in `.safetensors` (use a repo-unique basename per adapter)
   - `adapter_weight`: strength passed to ComfyUI `LoraLoaderModelOnly` (`strength_model`)
 
-Set **`CIVITAI_TOKEN`** in the worker environment if your Civitai download URLs require authentication; the worker appends `token` when present (see `handler._download_lora_file`). Optional: `COMFYUI_LORA_DIR` (default `/comfyui/models/loras`), `LORA_DOWNLOAD_MAX_BYTES`, `LORA_DOWNLOAD_TIMEOUT_SEC`.
+Set **`CIVITAI_TOKEN`** in the worker environment when a Civitai-era URL needs auth: if the `source` string contains **`civitai`** (case-insensitive, e.g. `civitai.com` or `civitai.red`) and the URL does not already include a `token` query param, the worker appends `token` (see `handler._download_lora_file`). Optional: `COMFYUI_LORA_DIR` (default `/comfyui/models/loras`), `LORA_DOWNLOAD_MAX_BYTES`, `LORA_DOWNLOAD_TIMEOUT_SEC`.
 
 LoRAs must be compatible with Wan2.2 I2V / VACE; unrelated SDXL/Flux LoRAs may have no effect or break the run.
 

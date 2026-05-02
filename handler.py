@@ -5,7 +5,7 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse, urlencode
+from urllib.parse import parse_qs, urlparse, urlencode
 
 import requests
 import runpod
@@ -173,7 +173,7 @@ def resolve_and_download_loras(request_input: dict[str, Any], saved_files: dict[
             raise HandlerError(f"Duplicate adapter_name in loras list: {safe_name}")
         seen_names.add(safe_name)
 
-        _validate_https_civitai_url(url)
+        _validate_https_lora_url(url)
         dest = COMFYUI_LORA_DIR / safe_name
         if not dest.exists() or dest.stat().st_size == 0:
             _download_lora_file(url, dest)
@@ -183,24 +183,27 @@ def resolve_and_download_loras(request_input: dict[str, Any], saved_files: dict[
     saved_files["loras"] = specs
 
 
-def _validate_https_civitai_url(url: str) -> None:
+def _validate_https_lora_url(url: str) -> None:
     parsed = urlparse(url)
     if (parsed.scheme or "").lower() != "https":
         raise HandlerError("LoRA source must use https URLs")
-    if not _is_civitai_host(parsed.netloc or ""):
-        raise HandlerError(f"LoRA source host not allowed (only Civitai): {parsed.netloc}")
+    if not parsed.hostname:
+        raise HandlerError("LoRA source URL must include a host")
 
 
-def _is_civitai_host(netloc: str) -> bool:
-    host = (netloc.split("@")[-1].split(":")[0] or "").lower()
-    return host == "civitai.com" or host.endswith(".civitai.com")
+def _query_has_token_param(query: str) -> bool:
+    return any(k.lower() == "token" for k in parse_qs(query, keep_blank_values=True))
 
 
 def _download_lora_file(url: str, dest: Path) -> None:
     token = os.environ.get("CIVITAI_TOKEN")
     download_url = url
     parsed = urlparse(url)
-    if token and _is_civitai_host(parsed.netloc or ""):
+    if (
+        token
+        and "civitai" in url.lower()
+        and not _query_has_token_param(parsed.query)
+    ):
         sep = "&" if "?" in url else "?"
         download_url = f"{url}{sep}{urlencode({'token': token})}"
 
@@ -225,8 +228,8 @@ def _download_lora_file(url: str, dest: Path) -> None:
             final = urlparse(response.url)
             if (final.scheme or "").lower() != "https":
                 raise HandlerError(f"Redirect left non-https URL for LoRA download: {response.url}")
-            if not _is_civitai_host(final.netloc or ""):
-                raise HandlerError(f"Redirect blocked: final host must be Civitai: {final.netloc}")
+            if not final.hostname:
+                raise HandlerError(f"Redirect left URL without host for LoRA download: {response.url}")
 
             content_length_header = response.headers.get("Content-Length")
             if content_length_header and content_length_header.isdigit():
