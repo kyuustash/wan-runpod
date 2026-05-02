@@ -1,3 +1,4 @@
 runpod
 requests
 Pillow
+hf_transfer

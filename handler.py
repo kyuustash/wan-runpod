@@ -1,6 +1,8 @@
 import base64
+import json
 import os
 import re
+import struct
 import subprocess
 import time
 from pathlib import Path
@@ -23,10 +25,10 @@ COMFYUI_PORT = int(os.getenv("COMFYUI_PORT", "8188"))
 COMFYUI_TIMEOUT_SECONDS = int(os.getenv("COMFYUI_TIMEOUT_SECONDS", "1800"))
 LORA_DOWNLOAD_MAX_BYTES = int(os.getenv("LORA_DOWNLOAD_MAX_BYTES", str(2 * 1024 * 1024 * 1024)))
 LORA_DOWNLOAD_TIMEOUT_SEC = int(os.getenv("LORA_DOWNLOAD_TIMEOUT_SEC", "600"))
-
 _COMFY_PROCESS: subprocess.Popen[bytes] | None = None
 _COMFY_CLIENT: ComfyClient | None = None
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9_.-]+")
+_SAFETENSORS_HEADER_MAX_BYTES = 1_000_000
 
 
 class HandlerError(ValueError):
@@ -175,8 +177,25 @@ def resolve_and_download_loras(request_input: dict[str, Any], saved_files: dict[
 
         _validate_https_lora_url(url)
         dest = COMFYUI_LORA_DIR / safe_name
-        if not dest.exists() or dest.stat().st_size == 0:
-            _download_lora_file(url, dest)
+        if dest.exists() and dest.stat().st_size > 0 and _is_valid_safetensors_file(dest):
+            pass
+        else:
+            if dest.exists():
+                dest.unlink()
+            content_type = _download_lora_file(url, dest)
+            if not _is_valid_safetensors_file(dest):
+                if dest.exists():
+                    dest.unlink()
+                hint = ""
+                if content_type and "text/html" in content_type.lower():
+                    hint = (
+                        " Server returned text/html; use a direct https file URL "
+                        "(Hugging Face /resolve/…/file.safetensors) or set CIVITAI_TOKEN if needed."
+                    )
+                raise HandlerError(
+                    f"LoRA download for {safe_name} is not valid safetensors; "
+                    f"URL may return HTML or require auth.{hint}"
+                )
 
         specs.append({"adapter_name": safe_name, "adapter_weight": weight})
 
@@ -195,7 +214,34 @@ def _query_has_token_param(query: str) -> bool:
     return any(k.lower() == "token" for k in parse_qs(query, keep_blank_values=True))
 
 
-def _download_lora_file(url: str, dest: Path) -> None:
+def _is_valid_safetensors_file(path: Path) -> bool:
+    """True if path looks like a safetensors file (parsable JSON header after 8-byte LE length)."""
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return False
+    if size < 10:
+        return False
+    try:
+        with path.open("rb") as handle:
+            length_prefix = handle.read(8)
+            if len(length_prefix) != 8:
+                return False
+            (header_size,) = struct.unpack("<Q", length_prefix)
+            if header_size < 2 or header_size > _SAFETENSORS_HEADER_MAX_BYTES:
+                return False
+            if size < 8 + header_size:
+                return False
+            header_blob = handle.read(header_size)
+            if len(header_blob) != header_size:
+                return False
+            json.loads(header_blob.decode("utf-8"))
+    except (OSError, struct.error, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return False
+    return True
+
+
+def _download_lora_file(url: str, dest: Path) -> str | None:
     token = os.environ.get("CIVITAI_TOKEN")
     download_url = url
     parsed = urlparse(url)
@@ -225,6 +271,7 @@ def _download_lora_file(url: str, dest: Path) -> None:
             allow_redirects=True,
         ) as response:
             response.raise_for_status()
+            content_type = response.headers.get("Content-Type")
             final = urlparse(response.url)
             if (final.scheme or "").lower() != "https":
                 raise HandlerError(f"Redirect left non-https URL for LoRA download: {response.url}")
@@ -254,6 +301,7 @@ def _download_lora_file(url: str, dest: Path) -> None:
                     handle.write(chunk)
 
         dest_part.replace(dest)
+        return content_type
     except Exception:
         if dest_part.exists():
             dest_part.unlink()

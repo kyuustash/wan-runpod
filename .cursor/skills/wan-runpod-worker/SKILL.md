@@ -82,10 +82,13 @@ Use this as a syntax/template check only. Real ComfyUI node compatibility and ge
 
 ## Deployment Notes
 
-Build for RunPod with:
+Build for RunPod with (prefer `--build-arg HF_TOKEN` for cold model pulls; see `README.md` **RunPod builder timeouts**):
 
 ```bash
-docker build --platform linux/amd64 -t <registry>/<image>:wan22 .
+docker build \
+  --build-arg HF_TOKEN=hf_... \
+  --platform linux/amd64 \
+  -t <registry>/<image>:wan22 .
 docker push <registry>/<image>:wan22
 ```
 

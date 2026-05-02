@@ -18,24 +18,43 @@ The Docker image bakes in ComfyUI, VideoHelperSuite, VACE helper nodes, and the 
 
 ## Build And Push
 
-Build for RunPod's Linux AMD64 runtime:
+Build for RunPod's Linux AMD64 runtime. **Pass a Hugging Face read token** whenever possible — it raises rate limits, cuts stalls, and avoids losing a short build budget to retry sleeps (see [RunPod builder timeouts](#runpod-builder-timeouts)).
+
+```bash
+docker build \
+  --build-arg HF_TOKEN=hf_... \
+  --platform linux/amd64 \
+  -t <registry>/<image>:wan22 .
+docker push <registry>/<image>:wan22
+```
+
+For a local build without HF auth (not recommended for cold model pulls):
 
 ```bash
 docker build --platform linux/amd64 -t <registry>/<image>:wan22 .
 docker push <registry>/<image>:wan22
 ```
 
+The image sets `HF_HUB_ENABLE_HF_TRANSFER=1` and `HF_HUB_DOWNLOAD_TIMEOUT=900` during model `RUN` steps; `hf_transfer` is installed from [`requirements.txt`](requirements.txt). Model layers use a BuildKit cache mount at `/root/.cache/huggingface`; remote builders (including RunPod) may or may not reuse that cache across builds.
+
 The baked model set is large. Set a large enough container disk in the RunPod template, and use a high-VRAM GPU class suitable for Wan2.2 14B fp8 video workflows.
 
 ### RunPod builder timeouts
 
-Large images can fail mid-build or during registry upload. On the endpoint **Builds** tab, check whether the failure happened in **Building** (downloads, `RUN` steps) or **Uploading** (pushing layers); that points to different fixes (HF/network vs registry throughput).
+**How to read the logs.** If you see a line like `#23 writing layer … DONE` immediately before `Build exceeded maximum time limit` (for example **1800 seconds**), that BuildKit step **succeeded** — the job hit a **wall-clock cap** on the whole pipeline (pull base, `RUN` steps, export, registry **Uploading**), not a failure inside step 23. A message such as `git was not found` comes from Buildx metadata and does not cause timeouts. **`COMFYUI_TIMEOUT_SECONDS` in the Dockerfile is only used when ComfyUI runs inside the worker**; it is not the hosted Docker build limit.
 
-For GitHub-connected workers, RunPod documents a **160-minute** total limit for the build plus upload; see [GitHub integration limitations](https://docs.runpod.io/serverless/workers/github-integration). If you see a shorter cutoff, treat it as an environment-specific timeout and still use the logs to see which phase stopped.
+**Diagnose in the Builds UI.** On the endpoint **Builds** tab, note whether the failed run was still in **Building** (downloads and `RUN` steps) or **Uploading** (pushing multi-GB layers) when the timer stopped. **Building** → focus on Hugging Face throughput, auth, and network; **Uploading** → focus on registry speed and build timeouts that include push time.
 
-The Dockerfile uses **one `RUN` per model file** so each finished download becomes its own layer. Rebuilds can reuse those layers when the remote builder’s cache still has them.
+**Shorter limits (for example 30 minutes).** Some hosted build paths enforce a **30-minute (1800s)** total budget. GitHub-connected flows can allow much longer totals; see [GitHub integration limitations](https://docs.runpod.io/serverless/workers/github-integration). If your dashboard or team settings expose a higher **build timeout**, raise it for this image. If not, treat the cap as fixed and offload the build (next bullet).
 
-If the hosted builder keeps timing out or never warms cache, run `docker build` and `docker push` on your own hardware (or a VPS / CI you control). Avoid baking multi-gigabyte model downloads in **GitHub Actions** if your account is sensitive to large outbound pulls on shared runners. Point the RunPod template **Container image** at the registry tag you pushed.
+**Prefer local build + registry tag for routine deploys.** RunPod’s remote builder may not persist BuildKit cache, so redeploys can redo large downloads and pushes. Reliable approach:
+
+1. Run `docker build` and `docker push` on your own machine, a VPS, or CI you control (use `--platform linux/amd64` and **`--build-arg HF_TOKEN`**).
+2. In the serverless template, set **Container image** to that registry tag (for example `<registry>/<image>:wan22`). Redeploys that only change handler code can use cache on **your** builder instead of repeating the full cold path on RunPod.
+
+Avoid baking multi-gigabyte model downloads in **GitHub Actions** if your account is sensitive to large outbound pulls on shared runners.
+
+The Dockerfile uses **one `RUN` per model file** so each finished download becomes its own layer. Rebuilds can reuse those layers when the builder’s cache still has them.
 
 ## RunPod Endpoint
 
