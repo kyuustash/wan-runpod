@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.4
 FROM runpod/worker-comfyui:5.8.5-base
 
-ARG HF_TOKEN="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"
+ARG HF_TOKEN=""
 ENV HF_TOKEN=${HF_TOKEN} \
     HF_HUB_ENABLE_HF_TRANSFER=1 \
     HF_HUB_DOWNLOAD_TIMEOUT=900 \
