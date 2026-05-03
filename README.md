@@ -35,7 +35,7 @@ docker build --platform linux/amd64 -t <registry>/<image>:wan22 .
 docker push <registry>/<image>:wan22
 ```
 
-The image sets `HF_HUB_ENABLE_HF_TRANSFER=1` and `HF_HUB_DOWNLOAD_TIMEOUT=900` during model `RUN` steps; `hf_transfer` is installed from [`requirements.txt`](requirements.txt). Model layers use a BuildKit cache mount at `/root/.cache/huggingface`; remote builders (including RunPod) may or may not reuse that cache across builds.
+The image sets `HF_HUB_ENABLE_HF_TRANSFER=1` and `HF_HUB_DOWNLOAD_TIMEOUT=900` during model `RUN` steps; `hf_transfer` is installed from [`requirements.txt`](requirements.txt). Model files are fetched in one `RUN` via [`docker/model-downloads.sh`](docker/model-downloads.sh) with a BuildKit cache mount at `/root/.cache/huggingface`; remote builders (including RunPod) may or may not reuse that cache across builds.
 
 The baked model set is large. Set a large enough container disk in the RunPod template, and use a high-VRAM GPU class suitable for Wan2.2 14B fp8 video workflows.
 
@@ -52,9 +52,13 @@ The baked model set is large. Set a large enough container disk in the RunPod te
 1. Run `docker build` and `docker push` on your own machine, a VPS, or CI you control (use `--platform linux/amd64` and **`--build-arg HF_TOKEN`**).
 2. In the serverless template, set **Container image** to that registry tag (for example `<registry>/<image>:wan22`). Redeploys that only change handler code can use cache on **your** builder instead of repeating the full cold path on RunPod.
 
-Avoid baking multi-gigabyte model downloads in **GitHub Actions** if your account is sensitive to large outbound pulls on shared runners.
+**Imports vs exports.** A log line showing a Hugging Face URL at 100% (for example `Downloading … 100%`) means the **model fetch inside the `RUN` succeeded**. Failures in steps named like `exporting to oci image format`, `exporting layers`, `sending tarball`, or **`exporting cache to client directory`** happen when BuildKit **writes image or cache blobs** (often to the hosted builder’s registry volume). Those can surface as I/O or sync errors even when downloads finished—treat them as **export/storage** issues, not Hugging Face.
 
-The Dockerfile uses **one `RUN` per model file** so each finished download becomes its own layer. Rebuilds can reuse those layers when the builder’s cache still has them.
+**Layer tradeoff.** The Dockerfile uses **one models layer** (all weights in a single `RUN`) so hosted builders push and sync **fewer multi-GB layer blobs** than with one layer per file. The tradeoff is **less granular Docker layer reuse**: changing any model URL or the script invalidates that whole layer (the HF cache mount can still shorten re-downloads when it persists).
+
+**RunPod docs.** General Dockerfile practices (image size, multi-stage builds) are covered in [Create a Dockerfile](https://docs.runpod.io/serverless/workers/create-dockerfile). This repo does **not** assume a GitHub Actions workflow that publishes a separate “slim” image; build and push the full image from an environment you control when the hosted builder is too slow or flaky.
+
+Avoid baking multi-gigabyte model downloads in **GitHub Actions** if your account is sensitive to large outbound pulls on shared runners.
 
 ## RunPod Endpoint
 
