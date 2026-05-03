@@ -11,6 +11,32 @@ class ComfyClientError(RuntimeError):
     pass
 
 
+def _format_workflow_error_summary(prompt_id: str, messages: Any) -> str:
+    for item in messages or []:
+        if (
+            isinstance(item, (list, tuple))
+            and len(item) >= 2
+            and item[0] == "execution_error"
+            and isinstance(item[1], dict)
+        ):
+            payload = item[1]
+            nid = payload.get("node_id")
+            et = payload.get("exception_type")
+            em = str(payload.get("exception_message") or "")
+            head = em.split("\n", 1)[0][:400]
+            return f"ComfyUI workflow failed (prompt_id={prompt_id}, node_id={nid}): {et}: {head}"
+    return f"ComfyUI workflow failed (prompt_id={prompt_id})"
+
+
+class ComfyWorkflowError(ComfyClientError):
+    """ComfyUI reported status_str=error; carries raw history status messages for debug output."""
+
+    def __init__(self, prompt_id: str, messages: Any) -> None:
+        self.prompt_id = prompt_id
+        self.messages = messages
+        super().__init__(_format_workflow_error_summary(prompt_id, messages))
+
+
 class ComfyClient:
     def __init__(self, host: str, port: int, timeout_seconds: int = 1800) -> None:
         self.base_url = f"http://{host}:{port}"
@@ -64,7 +90,7 @@ class ComfyClient:
                 status = result.get("status", {})
                 if status.get("status_str") == "error":
                     messages = status.get("messages") or []
-                    raise ComfyClientError(f"ComfyUI workflow failed: {messages}")
+                    raise ComfyWorkflowError(prompt_id, messages)
                 return result
             time.sleep(1)
 

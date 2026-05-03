@@ -7,12 +7,12 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse, urlencode
+from urllib.parse import parse_qs, urlparse, urlencode, urlunparse
 
 import requests
 import runpod
 
-from comfy_client import ComfyClient, ComfyClientError
+from comfy_client import ComfyClient, ComfyClientError, ComfyWorkflowError
 from workflow_builder import WorkflowBuildError, build_workflow
 
 
@@ -29,6 +29,9 @@ _COMFY_PROCESS: subprocess.Popen[bytes] | None = None
 _COMFY_CLIENT: ComfyClient | None = None
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9_.-]+")
 _SAFETENSORS_HEADER_MAX_BYTES = 1_000_000
+_DEBUG_MAX_TRACEBACK_LINES = 40
+_DEBUG_MAX_TRACEBACK_LINE_LEN = 600
+_LORA_DEBUG_PREFIX_BYTES = 16
 
 
 class HandlerError(ValueError):
@@ -36,14 +39,23 @@ class HandlerError(ValueError):
 
 
 def handler(event: dict[str, Any]) -> dict[str, Any]:
+    raw_input = event.get("input")
+    debug_logs = isinstance(raw_input, dict) and bool(raw_input.get("debug_logs", False))
+    lora_debug: list[dict[str, Any]] = []
+    workflow: dict[str, Any] | None = None
+
     try:
-        request_input = event.get("input") or {}
-        if not isinstance(request_input, dict):
+        if not isinstance(raw_input, dict):
             raise HandlerError("event.input must be an object")
 
+        request_input = raw_input
         client = ensure_comfy_client()
         saved_files = save_request_files(request_input)
-        resolve_and_download_loras(request_input, saved_files)
+        resolve_and_download_loras(
+            request_input,
+            saved_files,
+            lora_debug if debug_logs else None,
+        )
         workflow = build_workflow(request_input, saved_files)
 
         prompt_id = client.queue_prompt(workflow)
@@ -68,10 +80,100 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
             response["images"] = images
 
         return response
-    except (ComfyClientError, HandlerError, WorkflowBuildError) as exc:
-        return {"status": "error", "error": str(exc)}
-    except Exception as exc:  # RunPod should receive structured errors even for unexpected failures.
-        return {"status": "error", "error": f"Unhandled worker error: {exc}"}
+    except Exception as exc:
+        return _build_error_response(
+            exc,
+            debug_logs,
+            workflow=workflow,
+            lora_debug=lora_debug,
+        )
+
+
+def _build_error_response(
+    exc: Exception,
+    debug_logs: bool,
+    *,
+    workflow: dict[str, Any] | None,
+    lora_debug: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if isinstance(exc, (ComfyClientError, HandlerError, WorkflowBuildError)):
+        msg = str(exc)
+    else:
+        msg = f"Unhandled worker error: {exc}"
+
+    body: dict[str, Any] = {"status": "error", "error": msg}
+    if not debug_logs:
+        return body
+
+    debug: dict[str, Any] = {
+        "exception_type": type(exc).__name__,
+        "lora_dir": str(COMFYUI_LORA_DIR.resolve()),
+    }
+    if isinstance(exc, ComfyWorkflowError):
+        debug["prompt_id"] = exc.prompt_id
+        debug["comfy_messages"] = _cap_comfy_messages(exc.messages)
+    if lora_debug:
+        debug["loras"] = lora_debug
+    if workflow:
+        lora_nodes = _lora_loader_nodes_from_workflow(workflow)
+        if lora_nodes:
+            debug["lora_loader_nodes"] = lora_nodes
+
+    body["debug"] = debug
+    return body
+
+
+def _cap_comfy_messages(messages: Any) -> Any:
+    if not isinstance(messages, list):
+        return messages
+    capped: list[Any] = []
+    for raw in messages:
+        if not (isinstance(raw, (list, tuple)) and len(raw) >= 2):
+            capped.append(raw)
+            continue
+        ev, payload = raw[0], raw[1]
+        if ev == "execution_error" and isinstance(payload, dict):
+            pl = dict(payload)
+            tb = pl.get("traceback")
+            if isinstance(tb, list):
+                pl["traceback"] = [
+                    str(line)[:_DEBUG_MAX_TRACEBACK_LINE_LEN] for line in tb[:_DEBUG_MAX_TRACEBACK_LINES]
+                ]
+            capped.append([ev, pl])
+        else:
+            capped.append([ev, payload])
+    return capped
+
+
+def _sanitize_url_for_logs(url: str) -> str:
+    parsed = urlparse(url)
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
+
+
+def _lora_file_debug_prefix_hex(path: Path, max_bytes: int = _LORA_DEBUG_PREFIX_BYTES) -> str:
+    try:
+        data = path.read_bytes()[:max_bytes]
+    except OSError:
+        return ""
+    return data.hex()
+
+
+def _lora_loader_nodes_from_workflow(workflow: dict[str, Any]) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = []
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict) or node.get("class_type") != "LoraLoaderModelOnly":
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            inputs = {}
+        found.append(
+            {
+                "node_id": str(node_id),
+                "lora_name": inputs.get("lora_name"),
+                "strength_model": inputs.get("strength_model"),
+            }
+        )
+    return sorted(found, key=lambda x: x["node_id"])
 
 
 def ensure_comfy_client() -> ComfyClient:
@@ -138,7 +240,11 @@ def save_request_files(request_input: dict[str, Any]) -> dict[str, Any]:
     return saved
 
 
-def resolve_and_download_loras(request_input: dict[str, Any], saved_files: dict[str, Any]) -> None:
+def resolve_and_download_loras(
+    request_input: dict[str, Any],
+    saved_files: dict[str, Any],
+    debug_lora_records: list[dict[str, Any]] | None = None,
+) -> None:
     """Populate saved_files[\"loras\"] when input.loras is non-empty; download each file to COMFYUI_LORA_DIR."""
     raw = request_input.get("loras")
     if raw is None or raw == []:
@@ -177,12 +283,16 @@ def resolve_and_download_loras(request_input: dict[str, Any], saved_files: dict[
 
         _validate_https_lora_url(url)
         dest = COMFYUI_LORA_DIR / safe_name
-        if dest.exists() and dest.stat().st_size > 0 and _is_valid_safetensors_file(dest):
+        used_cache = dest.exists() and dest.stat().st_size > 0 and _is_valid_safetensors_file(dest)
+        content_type: str | None = None
+        final_url: str | None = None
+
+        if used_cache:
             pass
         else:
             if dest.exists():
                 dest.unlink()
-            content_type = _download_lora_file(url, dest)
+            content_type, final_url = _download_lora_file(url, dest)
             if not _is_valid_safetensors_file(dest):
                 if dest.exists():
                     dest.unlink()
@@ -196,6 +306,20 @@ def resolve_and_download_loras(request_input: dict[str, Any], saved_files: dict[
                     f"LoRA download for {safe_name} is not valid safetensors; "
                     f"URL may return HTML or require auth.{hint}"
                 )
+
+        if debug_lora_records is not None:
+            entry: dict[str, Any] = {
+                "adapter_name": safe_name,
+                "path": str(dest.resolve()),
+                "size_bytes": dest.stat().st_size,
+                "first_16_bytes_hex": _lora_file_debug_prefix_hex(dest),
+                "safetensors_header_ok": _is_valid_safetensors_file(dest),
+                "used_cached_file": used_cache,
+            }
+            if not used_cache and final_url:
+                entry["download_content_type"] = content_type
+                entry["download_final_url"] = _sanitize_url_for_logs(final_url)
+            debug_lora_records.append(entry)
 
         specs.append({"adapter_name": safe_name, "adapter_weight": weight})
 
@@ -241,7 +365,7 @@ def _is_valid_safetensors_file(path: Path) -> bool:
     return True
 
 
-def _download_lora_file(url: str, dest: Path) -> str | None:
+def _download_lora_file(url: str, dest: Path) -> tuple[str | None, str]:
     token = os.environ.get("CIVITAI_TOKEN")
     download_url = url
     parsed = urlparse(url)
@@ -301,7 +425,7 @@ def _download_lora_file(url: str, dest: Path) -> str | None:
                     handle.write(chunk)
 
         dest_part.replace(dest)
-        return content_type
+        return content_type, str(response.url)
     except Exception:
         if dest_part.exists():
             dest_part.unlink()
