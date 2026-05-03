@@ -35,6 +35,31 @@ docker build --platform linux/amd64 -t <registry>/<image>:wan22 .
 docker push <registry>/<image>:wan22
 ```
 
+### RunPod volume terminal: build and push to Docker Hub
+
+Use a **Pod** (GPU optional) with **Docker** and a **network volume** with plenty of free space. Mount the volume (example mount path: `/workspace`). Models are **baked into the image** by the Dockerfile; your serverless endpoint then uses **Import from Docker Registry** with the tag you push—no separate model fetch in handler code.
+
+Replace placeholders, then paste into the pod terminal:
+
+```bash
+mkdir -p /workspace
+cd /workspace
+git clone --depth 1 --branch main https://github.com/YOUR_GITHUB/wan-runpod.git wan-runpod
+cd /workspace/wan-runpod
+chmod +x scripts/build_and_push_dockerhub.sh
+
+export DOCKERHUB_USER="YOUR_DOCKERHUB_USERNAME"
+export DOCKERHUB_TOKEN="dckr_pat_YOUR_ACCESS_TOKEN"
+export IMAGE_NAME="wan-runpod"
+export TAG="latest"
+# Strongly recommended for Hugging Face rate limits during docker build:
+# export HF_TOKEN="hf_YOUR_TOKEN"
+
+bash scripts/build_and_push_dockerhub.sh
+```
+
+In RunPod **Serverless**, create or edit the template: **Container image** = `YOUR_DOCKERHUB_USERNAME/wan-runpod:latest` (or `docker.io/...`). Add **registry credentials** if the Hub repo is private.
+
 The image sets `HF_HUB_ENABLE_HF_TRANSFER=1` and `HF_HUB_DOWNLOAD_TIMEOUT=900` during model `RUN` steps; `hf_transfer` is installed from [`requirements.txt`](requirements.txt). Model files are fetched in one `RUN` via [`docker/model-downloads.sh`](docker/model-downloads.sh) with a BuildKit cache mount at `/root/.cache/huggingface`; remote builders (including RunPod) may or may not reuse that cache across builds.
 
 The baked model set is large. Set a large enough container disk in the RunPod template, and use a high-VRAM GPU class suitable for Wan2.2 14B fp8 video workflows.
