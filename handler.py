@@ -32,6 +32,8 @@ _SAFETENSORS_HEADER_MAX_BYTES = 1_000_000
 _DEBUG_MAX_TRACEBACK_LINES = 40
 _DEBUG_MAX_TRACEBACK_LINE_LEN = 600
 _LORA_DEBUG_PREFIX_BYTES = 16
+_COMFYUI_TIMEOUT_REQUEST_MIN = 1
+_COMFYUI_TIMEOUT_REQUEST_MAX = 86400
 
 
 class HandlerError(ValueError):
@@ -58,13 +60,17 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
         )
         workflow = build_workflow(request_input, saved_files)
 
+        wait_timeout = _parse_comfyui_timeout_override(request_input)
         prompt_id = client.queue_prompt(workflow)
-        history = client.wait_for_prompt(prompt_id)
+        history = client.wait_for_prompt(prompt_id, timeout_seconds=wait_timeout)
         outputs = client.collect_outputs(history, COMFYUI_OUTPUT_DIR)
 
         videos = outputs["videos"]
         images = outputs["images"]
 
+        effective_timeout = (
+            wait_timeout if wait_timeout is not None else COMFYUI_TIMEOUT_SECONDS
+        )
         response = {
             "status": "success",
             "prompt_id": prompt_id,
@@ -73,6 +79,7 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
             "last_frame": _select_last_frame(images),
             "video_count": len(videos),
             "image_count": len(images),
+            "comfyui_timeout_seconds": effective_timeout,
         }
 
         include_images = bool(request_input.get("include_images", False))
@@ -307,6 +314,70 @@ def resolve_and_download_loras(
                     f"URL may return HTML or require auth.{hint}"
                 )
 
+        low_safe_name: str | None = None
+        dest_low: Path | None = None
+        used_cache_low = False
+        content_type_low: str | None = None
+        final_url_low: str | None = None
+
+        url_low_raw = item.get("source_low_noise")
+        if url_low_raw is not None and url_low_raw != "":
+            if not isinstance(url_low_raw, str):
+                raise HandlerError(
+                    f"input.loras[{idx}] source_low_noise must be a string when provided"
+                )
+            url_low = url_low_raw.strip()
+            if url_low:
+                low_adapter = item.get("adapter_name_low_noise")
+                if isinstance(low_adapter, str) and low_adapter.strip():
+                    low_safe_name = _safe_filename(low_adapter.strip())
+                    if not low_safe_name.lower().endswith(".safetensors"):
+                        raise HandlerError(
+                            f"input.loras[{idx}] adapter_name_low_noise must end with .safetensors"
+                        )
+                else:
+                    low_safe_name = _safe_filename(
+                        f"{Path(safe_name).stem}_low_noise.safetensors"
+                    )
+
+                if low_safe_name == safe_name:
+                    raise HandlerError(
+                        f"input.loras[{idx}] low-noise filename must differ from adapter_name "
+                        f"when source_low_noise is set; use adapter_name_low_noise to pick a distinct name"
+                    )
+                if low_safe_name in seen_names:
+                    raise HandlerError(
+                        f"Duplicate adapter filename in loras list (low noise): {low_safe_name}"
+                    )
+
+                _validate_https_lora_url(url_low)
+                dest_low = COMFYUI_LORA_DIR / low_safe_name
+                used_cache_low = (
+                    dest_low.exists()
+                    and dest_low.stat().st_size > 0
+                    and _is_valid_safetensors_file(dest_low)
+                )
+                if used_cache_low:
+                    pass
+                else:
+                    if dest_low.exists():
+                        dest_low.unlink()
+                    content_type_low, final_url_low = _download_lora_file(url_low, dest_low)
+                    if not _is_valid_safetensors_file(dest_low):
+                        if dest_low.exists():
+                            dest_low.unlink()
+                        hint = ""
+                        if content_type_low and "text/html" in content_type_low.lower():
+                            hint = (
+                                " Server returned text/html; use a direct https file URL "
+                                "(Hugging Face /resolve/…/file.safetensors) or set CIVITAI_TOKEN if needed."
+                            )
+                        raise HandlerError(
+                            f"LoRA download for low-noise {low_safe_name} is not valid safetensors; "
+                            f"URL may return HTML or require auth.{hint}"
+                        )
+                seen_names.add(low_safe_name)
+
         if debug_lora_records is not None:
             entry: dict[str, Any] = {
                 "adapter_name": safe_name,
@@ -319,9 +390,22 @@ def resolve_and_download_loras(
             if not used_cache and final_url:
                 entry["download_content_type"] = content_type
                 entry["download_final_url"] = _sanitize_url_for_logs(final_url)
+            if low_safe_name is not None and dest_low is not None:
+                entry["adapter_name_low"] = low_safe_name
+                entry["low_path"] = str(dest_low.resolve())
+                entry["low_size_bytes"] = dest_low.stat().st_size
+                entry["low_first_16_bytes_hex"] = _lora_file_debug_prefix_hex(dest_low)
+                entry["low_safetensors_header_ok"] = _is_valid_safetensors_file(dest_low)
+                entry["low_used_cached_file"] = used_cache_low
+                if not used_cache_low and final_url_low:
+                    entry["low_download_content_type"] = content_type_low
+                    entry["low_download_final_url"] = _sanitize_url_for_logs(final_url_low)
             debug_lora_records.append(entry)
 
-        specs.append({"adapter_name": safe_name, "adapter_weight": weight})
+        spec: dict[str, Any] = {"adapter_name": safe_name, "adapter_weight": weight}
+        if low_safe_name is not None:
+            spec["adapter_name_low"] = low_safe_name
+        specs.append(spec)
 
     saved_files["loras"] = specs
 
@@ -444,6 +528,23 @@ def _safe_filename(name: str) -> str:
     if not cleaned:
         raise HandlerError("Filename cannot be empty")
     return cleaned[:120]
+
+
+def _parse_comfyui_timeout_override(request_input: dict[str, Any]) -> int | None:
+    """Resolve optional per-job wait cap for ComfyUI /history polling (seconds)."""
+    if "comfyui_timeout_seconds" not in request_input:
+        return None
+    raw = request_input["comfyui_timeout_seconds"]
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise HandlerError("comfyui_timeout_seconds must be an integer") from exc
+    if value < _COMFYUI_TIMEOUT_REQUEST_MIN or value > _COMFYUI_TIMEOUT_REQUEST_MAX:
+        raise HandlerError(
+            f"comfyui_timeout_seconds must be between {_COMFYUI_TIMEOUT_REQUEST_MIN} "
+            f"and {_COMFYUI_TIMEOUT_REQUEST_MAX}"
+        )
+    return value
 
 
 def _select_last_frame(images: list[dict[str, str]]) -> dict[str, str] | None:

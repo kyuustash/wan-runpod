@@ -22,10 +22,12 @@ API modes:
 
 For continuous video, pass each response's `last_frame.data` into the next request's `first_frame`, then drop the first frame of every segment after segment 0 when stitching.
 
+Optional `input.comfyui_timeout_seconds` (1–86400) overrides env `COMFYUI_TIMEOUT_SECONDS` for a single job (ComfyUI `/history` polling only); RunPod may still enforce its own execution limit.
+
 Output rule:
 
 - Keep RunPod job results small. A RunPod `job-done` 400 after `Prompt executed` usually means the handler payload was too large, not that ComfyUI failed.
-- By default, return `videos`, one `last_frame`, `video_count`, and `image_count`; do not return the full decoded PNG frame batch.
+- By default, return `videos`, one `last_frame`, `video_count`, `image_count`, and `comfyui_timeout_seconds` (effective wait cap for that job); do not return the full decoded PNG frame batch.
 - `include_images: true` is only for tiny debug runs because it can serialize every saved frame and exceed RunPod result limits.
 
 Dependency rule:

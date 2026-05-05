@@ -80,8 +80,9 @@ class ComfyClient:
             raise ComfyClientError(f"Could not read ComfyUI history: {response.status_code} {response.text}")
         return response.json()
 
-    def wait_for_prompt(self, prompt_id: str) -> dict[str, Any]:
-        deadline = time.monotonic() + self.timeout_seconds
+    def wait_for_prompt(self, prompt_id: str, *, timeout_seconds: int | None = None) -> dict[str, Any]:
+        limit = self.timeout_seconds if timeout_seconds is None else timeout_seconds
+        deadline = time.monotonic() + limit
 
         while time.monotonic() < deadline:
             history = self.get_history(prompt_id)
@@ -94,7 +95,7 @@ class ComfyClient:
                 return result
             time.sleep(1)
 
-        raise ComfyClientError(f"ComfyUI prompt timed out after {self.timeout_seconds}s")
+        raise ComfyClientError(f"ComfyUI prompt timed out after {limit}s")
 
     def collect_outputs(self, history_result: dict[str, Any], output_dir: Path) -> dict[str, list[dict[str, str]]]:
         outputs: dict[str, list[dict[str, str]]] = {"images": [], "videos": []}

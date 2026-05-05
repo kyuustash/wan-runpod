@@ -122,7 +122,7 @@ def _apply_values(workflow: dict[str, Any], params: dict[str, Any]) -> None:
 
 
 def _inject_lora_chains(workflow: dict[str, Any], loras: list[Any]) -> None:
-    specs: list[tuple[str, float]] = []
+    specs: list[tuple[str, float, str]] = []
     for idx, raw in enumerate(loras):
         if not isinstance(raw, dict):
             raise WorkflowBuildError(f"Resolved loras[{idx}] must be an object")
@@ -130,11 +130,18 @@ def _inject_lora_chains(workflow: dict[str, Any], loras: list[Any]) -> None:
         weight_raw = raw.get("adapter_weight", 1.0)
         if not isinstance(name, str) or not name:
             raise WorkflowBuildError(f"loras[{idx}] missing adapter_name")
+        name_low = raw.get("adapter_name_low")
+        if name_low is not None and (not isinstance(name_low, str) or not name_low):
+            raise WorkflowBuildError(
+                f"loras[{idx}] adapter_name_low must be a non-empty string when provided"
+            )
+        if name_low is None:
+            name_low = name
         try:
             strength = float(weight_raw)
         except (TypeError, ValueError) as exc:
             raise WorkflowBuildError(f"loras[{idx}] adapter_weight must be numeric") from exc
-        specs.append((name, strength))
+        specs.append((name, strength, name_low))
 
     branch_pairs = (("37", "54"), ("56", "55"))
     allocated = len(specs)
@@ -143,17 +150,24 @@ def _inject_lora_chains(workflow: dict[str, Any], loras: list[Any]) -> None:
     high_ids = merged_ids[:allocated]
     low_ids = merged_ids[allocated:]
 
-    for (unet_id, sampling_id, lora_ids) in (
-        (branch_pairs[0][0], branch_pairs[0][1], high_ids),
-        (branch_pairs[1][0], branch_pairs[1][1], low_ids),
+    for branch_idx, (unet_id, sampling_id, lora_ids) in enumerate(
+        (
+            (branch_pairs[0][0], branch_pairs[0][1], high_ids),
+            (branch_pairs[1][0], branch_pairs[1][1], low_ids),
+        )
     ):
         if unet_id not in workflow or sampling_id not in workflow:
             raise WorkflowBuildError("Workflow template missing UNet or ModelSampling nodes for LoRA injection")
         prev_conn: Any = [unet_id, 0]
+        name_field = 2 if branch_idx else 0
 
         for lora_nid, spec in zip(lora_ids, specs):
             workflow[lora_nid] = {
-                "inputs": {"model": prev_conn, "lora_name": spec[0], "strength_model": spec[1]},
+                "inputs": {
+                    "model": prev_conn,
+                    "lora_name": spec[name_field],
+                    "strength_model": spec[1],
+                },
                 "class_type": "LoraLoaderModelOnly",
             }
             prev_conn = [lora_nid, 0]

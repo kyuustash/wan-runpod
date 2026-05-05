@@ -115,11 +115,14 @@ Common fields:
 - `cfg`: defaults to `5.0`
 - `shift`: defaults to `5.0`
 - `output_prefix`: ComfyUI output filename prefix
+- `comfyui_timeout_seconds`: optional; max seconds to wait for ComfyUI to finish this job (`/history` polling). Overrides the worker env default `COMFYUI_TIMEOUT_SECONDS` for this request only. Integer **1–86400** (24h). Successful responses echo the effective value in `comfyui_timeout_seconds`. This does **not** raise RunPod’s own serverless execution limit; align both if jobs are killed by the platform first.
 - `include_images`: when `false` (default), do not embed every decoded frame PNG into the RunPod JSON output; omit this field entirely for the default compact response
 - `loras`: optional array of adapters for **compact modes** (`flf2v`, `vace_extend`, `continuous` only—raw `workflow` passthrough ignores it). Omit the field entirely or send `[]` to keep the baked workflow unchanged. Each item uses:
   - `source`: **https** LoRA download URL (any host you trust; the final URL after redirects must stay **https**)
   - `adapter_name`: filename under ComfyUI's `models/loras`, must end in `.safetensors` (use a repo-unique basename per adapter)
   - `adapter_weight`: strength passed to ComfyUI `LoraLoaderModelOnly` (`strength_model`)
+  - `source_low_noise`: optional second **https** URL; when set, that file is used on the **low-noise** UNet branch only (high-noise still uses `source`). Saved as `{stem_of_adapter_name}_low_noise.safetensors` unless you set `adapter_name_low_noise`.
+  - `adapter_name_low_noise`: optional; when using `source_low_noise`, override the low-noise filename (must end in `.safetensors` and differ from `adapter_name`)
 
 Set **`CIVITAI_TOKEN`** in the worker environment when a Civitai-era URL needs auth: if the `source` string contains **`civitai`** (case-insensitive, e.g. `civitai.com` or `civitai.red`) and the URL does not already include a `token` query param, the worker appends `token` (see `handler._download_lora_file`). Optional: `COMFYUI_LORA_DIR` (default `/comfyui/models/loras`), `LORA_DOWNLOAD_MAX_BYTES`, `LORA_DOWNLOAD_TIMEOUT_SEC`.
 

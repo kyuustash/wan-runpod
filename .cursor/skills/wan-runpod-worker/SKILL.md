@@ -50,6 +50,8 @@ Set `input.include_images: true` temporarily when full decoded PNG stacks must b
 
 Continuity rule: chain `last_frame.data` into the next request and drop the duplicate first frame when stitching later segments.
 
+Optional `input.comfyui_timeout_seconds` (integer 1–86400) overrides env `COMFYUI_TIMEOUT_SECONDS` for that job only; successful responses include `comfyui_timeout_seconds` with the effective wait cap.
+
 ## Output Troubleshooting
 
 If RunPod shows `COMPLETED` without `output`, or logs `Failed to return job results | 400 ... /job-done/...` after `Prompt executed`, assume the returned JSON payload is too large before suspecting generation failure.

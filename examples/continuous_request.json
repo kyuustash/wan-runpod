@@ -14,6 +14,7 @@
     "vace_strength": 1.0,
     "loras": [],
     "include_images": false,
+    "comfyui_timeout_seconds": 3600,
     "output_prefix": "wan22_continuous_segment_002",
     "first_frame": "data:image/png;base64,REPLACE_WITH_PREVIOUS_RESPONSE_LAST_FRAME"
   }
