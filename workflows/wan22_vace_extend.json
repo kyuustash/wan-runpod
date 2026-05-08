@@ -34,7 +34,7 @@
   "37": {
     "inputs": {
       "unet_name": "${vace_high_model}",
-      "weight_dtype": "default"
+      "weight_dtype": "${unet_weight_dtype}"
     },
     "class_type": "UNETLoader",
     "_meta": {"title": "Load Wan2.2 VACE High Noise Model"}
@@ -42,8 +42,8 @@
   "38": {
     "inputs": {
       "clip_name": "${text_encoder}",
-      "type": "wan",
-      "device": "default"
+      "type": "${clip_type}",
+      "device": "${clip_device}"
     },
     "class_type": "CLIPLoader",
     "_meta": {"title": "Load UMT5 Text Encoder"}
@@ -58,15 +58,15 @@
   "47": {
     "inputs": {
       "frame_rate": "${fps}",
-      "loop_count": 0,
+      "loop_count": "${video_loop_count}",
       "filename_prefix": "${output_prefix}",
-      "format": "video/h264-mp4",
-      "pix_fmt": "yuv420p",
-      "crf": 19,
-      "save_metadata": false,
-      "trim_to_audio": false,
-      "pingpong": false,
-      "save_output": true,
+      "format": "${video_format}",
+      "pix_fmt": "${video_pix_fmt}",
+      "crf": "${video_crf}",
+      "save_metadata": "${video_save_metadata}",
+      "trim_to_audio": "${video_trim_to_audio}",
+      "pingpong": "${video_pingpong}",
+      "save_output": "${video_save_output}",
       "images": ["8", 0]
     },
     "class_type": "VHS_VideoCombine",
@@ -80,7 +80,7 @@
       "width": "${width}",
       "height": "${height}",
       "length": "${frames}",
-      "batch_size": 1,
+      "batch_size": "${batch_size}",
       "strength": "${vace_strength}",
       "reference_image": ["52", 0]
     },
@@ -114,23 +114,23 @@
   "56": {
     "inputs": {
       "unet_name": "${vace_low_model}",
-      "weight_dtype": "default"
+      "weight_dtype": "${unet_weight_dtype}"
     },
     "class_type": "UNETLoader",
     "_meta": {"title": "Load Wan2.2 VACE Low Noise Model"}
   },
   "57": {
     "inputs": {
-      "add_noise": "enable",
+      "add_noise": "${ksampler_high_add_noise}",
       "noise_seed": "${seed}",
-      "control_after_generate": "fixed",
+      "control_after_generate": "${ksampler_high_control_after_generate}",
       "steps": "${steps}",
       "cfg": "${cfg}",
       "sampler_name": "${sampler_name}",
       "scheduler": "${scheduler}",
-      "start_at_step": 0,
+      "start_at_step": "${ksampler_high_start_at_step}",
       "end_at_step": "${high_noise_end_step}",
-      "return_with_leftover_noise": "enable",
+      "return_with_leftover_noise": "${ksampler_high_return_with_leftover_noise}",
       "model": ["54", 0],
       "positive": ["50", 0],
       "negative": ["50", 1],
@@ -141,16 +141,16 @@
   },
   "58": {
     "inputs": {
-      "add_noise": "disable",
-      "noise_seed": 0,
-      "control_after_generate": "fixed",
+      "add_noise": "${ksampler_low_add_noise}",
+      "noise_seed": "${ksampler_low_noise_seed}",
+      "control_after_generate": "${ksampler_low_control_after_generate}",
       "steps": "${steps}",
       "cfg": "${cfg}",
       "sampler_name": "${sampler_name}",
       "scheduler": "${scheduler}",
       "start_at_step": "${high_noise_end_step}",
-      "end_at_step": 10000,
-      "return_with_leftover_noise": "disable",
+      "end_at_step": "${ksampler_low_end_at_step}",
+      "return_with_leftover_noise": "${ksampler_low_return_with_leftover_noise}",
       "model": ["55", 0],
       "positive": ["50", 0],
       "negative": ["50", 1],

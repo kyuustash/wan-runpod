@@ -84,6 +84,39 @@ def _normalized_params(request_input: dict[str, Any], files: dict[str, Any]) -> 
         "scheduler": str(request_input.get("scheduler", "simple")),
         "output_prefix": output_prefix,
         "last_frame_prefix": f"{output_prefix}_last_frame",
+        # VHS_VideoCombine — optional; defaults match baked templates.
+        "video_loop_count": int(request_input.get("video_loop_count", 0)),
+        "video_format": str(request_input.get("video_format", "video/h264-mp4")),
+        "video_pix_fmt": str(request_input.get("video_pix_fmt", "yuv420p")),
+        "video_crf": int(request_input.get("video_crf", 19)),
+        "video_save_metadata": bool(request_input.get("video_save_metadata", False)),
+        "video_trim_to_audio": bool(request_input.get("video_trim_to_audio", False)),
+        "video_pingpong": bool(request_input.get("video_pingpong", False)),
+        "video_save_output": bool(request_input.get("video_save_output", True)),
+        # Loaders
+        "unet_weight_dtype": str(request_input.get("unet_weight_dtype", "default")),
+        "clip_type": str(request_input.get("clip_type", "wan")),
+        "clip_device": str(request_input.get("clip_device", "default")),
+        # WanFirstLastFrameToVideo / WanVaceToVideo
+        "batch_size": int(request_input.get("batch_size", 1)),
+        # KSamplerAdvanced — optional branch tuning (Comfy enum strings unchanged).
+        "ksampler_high_add_noise": str(request_input.get("ksampler_high_add_noise", "enable")),
+        "ksampler_high_control_after_generate": str(
+            request_input.get("ksampler_high_control_after_generate", "fixed")
+        ),
+        "ksampler_high_start_at_step": int(request_input.get("ksampler_high_start_at_step", 0)),
+        "ksampler_high_return_with_leftover_noise": str(
+            request_input.get("ksampler_high_return_with_leftover_noise", "enable")
+        ),
+        "ksampler_low_add_noise": str(request_input.get("ksampler_low_add_noise", "disable")),
+        "ksampler_low_noise_seed": int(request_input.get("ksampler_low_noise_seed", 0)),
+        "ksampler_low_control_after_generate": str(
+            request_input.get("ksampler_low_control_after_generate", "fixed")
+        ),
+        "ksampler_low_end_at_step": int(request_input.get("ksampler_low_end_at_step", 10000)),
+        "ksampler_low_return_with_leftover_noise": str(
+            request_input.get("ksampler_low_return_with_leftover_noise", "disable")
+        ),
     }
 
     for key in MODEL_DEFAULTS:
